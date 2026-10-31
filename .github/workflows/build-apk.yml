@@ -22,19 +22,19 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.7'
+          cache-disabled: true
 
       - name: Build Debug APK
         run: |
           if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
-            gradle assembleDebug
+            gradle assembleDebug --stacktrace
           else
-            # اگر پروژه داخل یک پوشه فرعی آپلود شده باشد، خودکار پیدایش می‌کند
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
             if [ -n "$SUBDIR" ]; then
               cd "$SUBDIR"
-              gradle assembleDebug
+              gradle assembleDebug --stacktrace
             else
-              echo "فایل settings.gradle پیدا نشد!"
+              echo "settings.gradle not found!"
               exit 1
             fi
           fi
