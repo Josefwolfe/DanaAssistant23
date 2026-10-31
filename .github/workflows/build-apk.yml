@@ -18,14 +18,29 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            gradle assembleDebug
+          else
+            # اگر پروژه داخل یک پوشه فرعی آپلود شده باشد، خودکار پیدایش می‌کند
+            SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
+            if [ -n "$SUBDIR" ]; then
+              cd "$SUBDIR"
+              gradle assembleDebug
+            else
+              echo "فایل settings.gradle پیدا نشد!"
+              exit 1
+            fi
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Dana-Assistant-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: "**/build/outputs/apk/debug/*.apk"
