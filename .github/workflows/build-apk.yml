@@ -24,36 +24,395 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Auto-Fix Package Name & Clean Old Files
+      - name: Generate Complete Kotlin & Manifest Files
         run: |
-          # پیدا کردن پوشه اصلی پروژه
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
             if [ -n "$SUBDIR" ]; then cd "$SUBDIR"; fi
           fi
 
-          # ۱. استخراج خودکار نام پکیج اصلی پروژه از build.gradle یا AndroidManifest
-          PKG=$(grep -E "namespace|applicationId" app/build.gradle* | head -n 1 | sed -E 's/.*["'\'']([^"'\'']+)["'\''].*/\1/' | tr -d '[:space:]')
-          if [ -z "$PKG" ]; then
-            PKG=$(grep -oP 'package="\K[^"]+' app/src/main/AndroidManifest.xml || echo "com.example.dana")
-          fi
-          echo "✅ Detected Package Name: $PKG"
+          # پاک کردن فایل‌های ناقص قبلی
+          find app/src/main -type f -name "*.kt" -delete
+          mkdir -p app/src/main/java/ir/dana/assistant
 
-          # ۲. پیدا کردن پوشه فایل‌های کاتلین
-          SRC_DIR=$(find app/src/main/java app/src/main/kotlin -type f -name "*.kt" -printf "%h\n" 2>/dev/null | head -n 1)
-          if [ -z "$SRC_DIR" ]; then
-            SRC_DIR="app/src/main/java/$(echo $PKG | tr '.' '/')"
-            mkdir -p "$SRC_DIR"
-          fi
-          echo "✅ Source Directory: $SRC_DIR"
+          # ساخت خودکار فایل کامل MainActivity.kt روی سرور
+          cat << 'EOF' > app/src/main/java/ir/dana/assistant/MainActivity.kt
+          package ir.dana.assistant
 
-          # ۳. حذف هرگونه فایل کاتلین قدیمی یا تکراری (مثل Theme.kt یا سرویس‌های قبلی) که باعث خطای کامپایل می‌شوند
-          find app/src/main -type f -name "*.kt" ! -name "MainActivity.kt" ! -name "VoiceService.kt" -delete
+          import android.Manifest
+          import android.app.Activity
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.content.pm.ServiceInfo
+          import android.database.Cursor
+          import android.graphics.Color
+          import android.graphics.drawable.GradientDrawable
+          import android.media.AudioManager
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.provider.ContactsContract
+          import android.provider.Settings
+          import android.speech.RecognitionListener
+          import android.speech.RecognizerIntent
+          import android.speech.SpeechRecognizer
+          import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.widget.Toast
+          import java.util.Locale
 
-          # ۴. هماهنگ کردن خط اول (package) در MainActivity.kt و VoiceService.kt
-          for f in $(find app/src/main -type f -name "*.kt"); do
-            sed -i "1s/^package .*/package $PKG/" "$f"
-          done
+          class MainActivity : Activity() {
+              private lateinit var statusText: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val rootLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setBackgroundColor(Color.parseColor("#121212"))
+                      setPadding(64, 64, 64, 64)
+                  }
+
+                  val titleText = TextView(this).apply {
+                      text = "دستیار هوشمند دانا"
+                      textSize = 26f
+                      setTextColor(Color.parseColor("#FFFFFF"))
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 24)
+                  }
+
+                  statusText = TextView(this).apply {
+                      text = "وضعیت: در حال آماده‌سازی..."
+                      textSize = 15f
+                      setTextColor(Color.parseColor("#B0B0B0"))
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 72)
+                  }
+
+                  val startButton = Button(this).apply {
+                      text = "فعال‌سازی دستیار در پس‌زمینه"
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#1E88E5"))
+                          cornerRadius = 32f
+                      }
+                      setPadding(48, 32, 48, 32)
+                      setOnClickListener { checkPermissionsAndStart() }
+                  }
+
+                  val stopButton = Button(this).apply {
+                      text = "توقف کامل دستیار"
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#E53935"))
+                          cornerRadius = 32f
+                      }
+                      setPadding(48, 28, 48, 28)
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      ).apply { topMargin = 40 }
+                      setOnClickListener {
+                          stopService(Intent(this@MainActivity, VoiceService::class.java))
+                          statusText.text = "وضعیت: دستیار متوقف شد."
+                          Toast.makeText(this@MainActivity, "دستیار غیرفعال شد", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  rootLayout.addView(titleText)
+                  rootLayout.addView(statusText)
+                  rootLayout.addView(startButton)
+                  rootLayout.addView(stopButton)
+                  setContentView(rootLayout)
+
+                  checkPermissionsAndStart()
+              }
+
+              private fun checkPermissionsAndStart() {
+                  val perms = mutableListOf(
+                      Manifest.permission.RECORD_AUDIO,
+                      Manifest.permission.READ_CONTACTS,
+                      Manifest.permission.CALL_PHONE
+                  )
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      perms.add(Manifest.permission.POST_NOTIFICATIONS)
+                  }
+                  val missing = perms.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+                  if (missing.isNotEmpty()) {
+                      requestPermissions(missing.toTypedArray(), 100)
+                  } else {
+                      startDanaService()
+                  }
+              }
+
+              private fun startDanaService() {
+                  val serviceIntent = Intent(this, VoiceService::class.java)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(serviceIntent)
+                  } else {
+                      startService(serviceIntent)
+                  }
+                  statusText.text = "دانا فعال است و گوش می‌دهد.\nبگویید: «دانا تنظیمات را باز کن»"
+                  Toast.makeText(this, "دستیار دانا فعال شد", Toast.LENGTH_SHORT).show()
+              }
+
+              override fun onRequestPermissionsResult(req: Int, perms: Array<out String>, res: IntArray) {
+                  super.onRequestPermissionsResult(req, perms, res)
+                  if (req == 100) startDanaService()
+              }
+          }
+
+          class VoiceService : Service(), TextToSpeech.OnInitListener {
+              private var speechRecognizer: SpeechRecognizer? = null
+              private lateinit var recognizerIntent: Intent
+              private var tts: TextToSpeech? = null
+              private val mainHandler = Handler(Looper.getMainLooper())
+              private var isListening = false
+              private var isSpeaking = false
+              private var isAwake = false
+
+              companion object {
+                  private const val CHANNEL_ID = "DanaChannel"
+                  private const val NOTIF_ID = 101
+              }
+
+              override fun onCreate() {
+                  super.onCreate()
+                  tts = TextToSpeech(this, this)
+                  startForegroundNotif()
+                  setupRecognizer()
+                  startListening(400L)
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  if (!isListening && !isSpeaking) startListening(300L)
+                  return START_STICKY
+              }
+
+              private fun setupRecognizer() {
+                  mainHandler.post {
+                      try {
+                          speechRecognizer?.destroy()
+                          speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this@VoiceService)
+                          recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                              putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                              putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
+                              putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                              putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                              putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
+                              putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
+                          }
+                          speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+                              override fun onReadyForSpeech(params: Bundle?) { isListening = true }
+                              override fun onBeginningOfSpeech() {}
+                              override fun onRmsChanged(rmsdB: Float) {}
+                              override fun onBufferReceived(buffer: ByteArray?) {}
+                              override fun onEndOfSpeech() { isListening = false }
+
+                              override fun onError(error: Int) {
+                                  isListening = false
+                                  val delay = if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1000L else 250L
+                                  if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
+                                      setupRecognizer()
+                                  }
+                                  if (!isSpeaking) startListening(delay)
+                              }
+
+                              override fun onResults(results: Bundle?) {
+                                  isListening = false
+                                  val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim() ?: ""
+                                  if (text.isNotEmpty()) handleInput(text) else if (!isSpeaking) startListening(250L)
+                              }
+
+                              override fun onPartialResults(partial: Bundle?) {
+                                  val text = partial?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim() ?: ""
+                                  if (!isAwake && (text == "دانا" || text == "جانم دانا")) {
+                                      isAwake = true
+                                      updateNotif("گوش می‌دهم... دستور دهید")
+                                  }
+                              }
+
+                              override fun onEvent(eventType: Int, params: Bundle?) {}
+                          })
+                      } catch (e: Exception) {}
+                  }
+              }
+
+              private fun startListening(delay: Long = 200L) {
+                  mainHandler.removeCallbacksAndMessages(null)
+                  mainHandler.postDelayed({
+                      if (!isSpeaking) {
+                          try {
+                              speechRecognizer?.cancel()
+                              speechRecognizer?.startListening(recognizerIntent)
+                          } catch (e: Exception) {
+                              setupRecognizer()
+                              startListening(1000L)
+                          }
+                      }
+                  }, delay)
+              }
+
+              private fun handleInput(rawText: String) {
+                  val text = rawText.replace("ي", "ی").replace("ك", "ک").trim()
+                  if (text == "دانا" || text == "سلام دانا") {
+                      isAwake = true
+                      updateNotif("دانا بیدار است: فرمان دهید...")
+                      speak("جانم")
+                      return
+                  }
+                  if (text.startsWith("دانا ")) {
+                      isAwake = false
+                      executeCmd(text.removePrefix("دانا").trim())
+                      return
+                  }
+                  if (isAwake) {
+                      isAwake = false
+                      executeCmd(text)
+                      return
+                  }
+                  startListening(250L)
+              }
+
+              private fun executeCmd(cmd: String) {
+                  updateNotif("آخرین دستور: $cmd")
+                  when {
+                      cmd.contains("باز کن") || cmd.contains("اجرا کن") -> {
+                          val app = cmd.replace("برنامه", "").replace("اپلیکیشن", "")
+                              .replace("را باز کن", "").replace("رو باز کن", "")
+                              .replace("باز کن", "").replace("اجرا کن", "").trim()
+                          if (openApp(app)) speak("باز شد") else speak("پیدا نشد")
+                      }
+                      cmd.contains("زنگ بزن") || cmd.contains("تماس بگیر") || cmd.startsWith("تماس با") -> {
+                          val name = cmd.replace("به", "").replace("با", "")
+                              .replace("زنگ بزن", "").replace("تماس بگیر", "").replace("تماس", "").trim()
+                          if (callContact(name)) speak("در حال تماس") else speak("مخاطب پیدا نشد")
+                      }
+                      cmd.contains("تنظیمات") -> {
+                          startActivity(Intent(Settings.ACTION_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+                          speak("تنظیمات باز شد")
+                      }
+                      else -> startListening(250L)
+                  }
+              }
+
+              private fun openApp(name: String): Boolean {
+                  val pm = packageManager
+                  for (app in pm.getInstalledApplications(0)) {
+                      val label = pm.getApplicationLabel(app).toString().lowercase()
+                      if (label.contains(name.lowercase())) {
+                          val intent = pm.getLaunchIntentForPackage(app.packageName)
+                          if (intent != null) {
+                              intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                              startActivity(intent)
+                              return true
+                          }
+                      }
+                  }
+                  return false
+              }
+
+              private fun callContact(name: String): Boolean {
+                  if (name.isEmpty()) return false
+                  var number: String? = null
+                  val cursor: Cursor? = contentResolver.query(
+                      ContactsContract.CommonDataKinds.Phone.CONTENT_URI, null,
+                      "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                      arrayOf("%$name%"), null
+                  )
+                  cursor?.use {
+                      if (it.moveToFirst()) {
+                          val idx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                          if (idx >= 0) number = it.getString(idx)
+                      }
+                  }
+                  return if (!number.isNullOrEmpty()) {
+                      startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
+                          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                      })
+                      true
+                  } else false
+              }
+
+              private fun speak(msg: String) {
+                  if (tts == null) { startListening(250L); return }
+                  isSpeaking = true
+                  mainHandler.post { speechRecognizer?.cancel() }
+                  val params = Bundle().apply { putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "DanaID") }
+                  tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, params, "DanaID")
+                  mainHandler.postDelayed({
+                      if (isSpeaking) { isSpeaking = false; startListening(200L) }
+                  }, 2500L)
+              }
+
+              override fun onInit(status: Int) {
+                  if (status == TextToSpeech.SUCCESS) {
+                      tts?.setLanguage(Locale("fa", "IR"))
+                      tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                          override fun onStart(id: String?) { isSpeaking = true }
+                          override fun onDone(id: String?) { isSpeaking = false; startListening(200L) }
+                          override fun onError(id: String?) { isSpeaking = false; startListening(200L) }
+                      })
+                  }
+              }
+
+              private fun startForegroundNotif() {
+                  val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      mgr.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Dana", NotificationManager.IMPORTANCE_LOW))
+                  }
+                  val notif = buildNotif("دانا فعال است و گوش می‌دهد...")
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                  } else {
+                      startForeground(NOTIF_ID, notif)
+                  }
+              }
+
+              private fun updateNotif(text: String) {
+                  val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                  mgr.notify(NOTIF_ID, buildNotif(text))
+              }
+
+              private fun buildNotif(text: String): Notification {
+                  val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      Notification.Builder(this, CHANNEL_ID)
+                  } else {
+                      @Suppress("DEPRECATION") Notification.Builder(this)
+                  }
+                  return b.setContentTitle("دستیار هوشمند دانا")
+                      .setContentText(text)
+                      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                      .setOngoing(true)
+                      .build()
+              }
+
+              override fun onDestroy() {
+                  mainHandler.removeCallbacksAndMessages(null)
+                  speechRecognizer?.destroy()
+                  tts?.stop()
+                  tts?.shutdown()
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          EOF
 
       - name: Build Debug APK
         run: |
@@ -61,7 +420,6 @@ jobs:
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
             if [ -n "$SUBDIR" ]; then cd "$SUBDIR"; fi
           fi
-          # اجرای بیلد و نمایش مستقیم خطای دقیق کاتلین در صورت وجود
           gradle assembleDebug > build_log.txt 2>&1 || {
             echo "================ علت دقیق خطای کد ================"
             grep -E "^e: |FAILURE:|What went wrong:" -A 5 build_log.txt || tail -n 40 build_log.txt
