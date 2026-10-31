@@ -8,7 +8,6 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -20,29 +19,30 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
+        uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK Licenses
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || \
-          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || \
-          echo "License step skipped"
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.5
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.5'
 
-      - name: Build Debug APK
+      - name: Locate Project Root and Build Debug APK
         run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          SETTINGS_FILE=$(find . -name "settings.gradle.kts" | head -n 1)
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: settings.gradle.kts not found in repository!"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "Building Android project in: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
           gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Upload Dana APK
+      - name: Upload Ready-to-Install Dana APK
         uses: actions/upload-artifact@v4
         with:
           name: Dana-AI-Assistant-APK
-          path: "app/build/outputs/apk/debug/*.apk"
-          if-no-files-found: error
+          path: "**/app/build/outputs/apk/debug/app-debug.apk"
