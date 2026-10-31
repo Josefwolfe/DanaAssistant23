@@ -24,20 +24,50 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
+      - name: Auto-Fix Package Name & Clean Old Files
+        run: |
+          # پیدا کردن پوشه اصلی پروژه
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+            SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
+            if [ -n "$SUBDIR" ]; then cd "$SUBDIR"; fi
+          fi
+
+          # ۱. استخراج خودکار نام پکیج اصلی پروژه از build.gradle یا AndroidManifest
+          PKG=$(grep -E "namespace|applicationId" app/build.gradle* | head -n 1 | sed -E 's/.*["'\'']([^"'\'']+)["'\''].*/\1/' | tr -d '[:space:]')
+          if [ -z "$PKG" ]; then
+            PKG=$(grep -oP 'package="\K[^"]+' app/src/main/AndroidManifest.xml || echo "com.example.dana")
+          fi
+          echo "✅ Detected Package Name: $PKG"
+
+          # ۲. پیدا کردن پوشه فایل‌های کاتلین
+          SRC_DIR=$(find app/src/main/java app/src/main/kotlin -type f -name "*.kt" -printf "%h\n" 2>/dev/null | head -n 1)
+          if [ -z "$SRC_DIR" ]; then
+            SRC_DIR="app/src/main/java/$(echo $PKG | tr '.' '/')"
+            mkdir -p "$SRC_DIR"
+          fi
+          echo "✅ Source Directory: $SRC_DIR"
+
+          # ۳. حذف هرگونه فایل کاتلین قدیمی یا تکراری (مثل Theme.kt یا سرویس‌های قبلی) که باعث خطای کامپایل می‌شوند
+          find app/src/main -type f -name "*.kt" ! -name "MainActivity.kt" ! -name "VoiceService.kt" -delete
+
+          # ۴. هماهنگ کردن خط اول (package) در MainActivity.kt و VoiceService.kt
+          for f in $(find app/src/main -type f -name "*.kt"); do
+            sed -i "1s/^package .*/package $PKG/" "$f"
+          done
+
       - name: Build Debug APK
         run: |
-          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
-            gradle assembleDebug --stacktrace
-          else
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
-            if [ -n "$SUBDIR" ]; then
-              cd "$SUBDIR"
-              gradle assembleDebug --stacktrace
-            else
-              echo "settings.gradle not found!"
-              exit 1
-            fi
+            if [ -n "$SUBDIR" ]; then cd "$SUBDIR"; fi
           fi
+          # اجرای بیلد و نمایش مستقیم خطای دقیق کاتلین در صورت وجود
+          gradle assembleDebug > build_log.txt 2>&1 || {
+            echo "================ علت دقیق خطای کد ================"
+            grep -E "^e: |FAILURE:|What went wrong:" -A 5 build_log.txt || tail -n 40 build_log.txt
+            echo "==================================================="
+            exit 1
+          }
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
