@@ -19,7 +19,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Ultimate Complete Dana Code
+      - name: Generate Fixed Dana Code with Imports
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -35,6 +35,7 @@ jobs:
           import android.app.*
           import android.content.*
           import android.content.pm.*
+          import android.database.Cursor
           import android.hardware.camera2.CameraManager
           import android.graphics.Color
           import android.graphics.drawable.GradientDrawable
