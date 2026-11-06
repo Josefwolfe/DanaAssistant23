@@ -18,7 +18,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Reporter Code
+      - name: Generate Diagnostic Code v2
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -36,9 +36,7 @@ jobs:
           import android.content.pm.*
           import android.graphics.Color
           import android.graphics.drawable.GradientDrawable
-          import android.net.Uri
           import android.os.*
-          import android.provider.*
           import android.speech.*
           import android.speech.tts.TextToSpeech
           import android.view.Gravity
@@ -71,7 +69,7 @@ jobs:
                   }
 
                   val title = TextView(this).apply {
-                      text = "گزارش‌گر خطاهای دستیار دانا"
+                      text = "رادار عیب‌یاب دانا (نسخه ۲)"
                       textSize = 18f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
@@ -92,24 +90,20 @@ jobs:
                   }
 
                   val btnCopy = Button(this).apply {
-                      text = "کپی کردن گزارش خطاها"
+                      text = "کپی کردن گزارش جدید"
                       setTextColor(Color.WHITE)
                       background = GradientDrawable().apply { setColor(Color.parseColor("#1E88E5")); cornerRadius = 20f }
                       setOnClickListener {
                           val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                           clipboard.setPrimaryClip(ClipData.newPlainText("DanaLogs", ErrorCollector.getLogs()))
-                          Toast.makeText(this@MainActivity, "گزارش خطاها کپی شد!", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(this@MainActivity, "گزارش کپی شد!", Toast.LENGTH_SHORT).show()
                       }
                   }
 
-                  layout.addView(title)
-                  layout.addView(scroll)
-                  layout.addView(btnCopy)
+                  layout.addView(title); layout.addView(scroll); layout.addView(btnCopy)
                   setContentView(layout)
 
                   ErrorCollector.updateView = { text -> runOnUiThread { logBox.setText(text); scroll.fullScroll(ScrollView.FOCUS_DOWN) } }
-                  ErrorCollector.log("برنامه باز شد. در حال بررسی مجوزها...")
-
                   checkPerms()
               }
 
@@ -117,30 +111,20 @@ jobs:
                   val p = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
                   if (Build.VERSION.SDK_INT >= 33) p.add(Manifest.permission.POST_NOTIFICATIONS)
                   val missing = p.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-                  if (missing.isNotEmpty()) {
-                      ErrorCollector.log("درخواست مجوزهای گمشده...")
-                      requestPermissions(missing.toTypedArray(), 100)
-                  } else {
-                      ErrorCollector.log("همه مجوزها تایید شده‌اند. استارت سرویس...")
-                      startDana()
-                  }
+                  if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 100) else startDana()
               }
 
               private fun startDana() {
                   try {
                       val i = Intent(this, VoiceService::class.java)
                       if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-                      ErrorCollector.log("سرویس پس‌زمینه فراخوانی شد.")
                   } catch (e: Exception) {
                       ErrorCollector.log("خطا در استارت سرویس: ${e.message}")
                   }
               }
 
               override fun onRequestPermissionsResult(c: Int, p: Array<out String>, r: IntArray) {
-                  if (c == 100) {
-                      ErrorCollector.log("نتیجه مجوزها دریافت شد. استارت سرویس...")
-                      startDana()
-                  }
+                  if (c == 100) startDana()
               }
           }
 
@@ -159,64 +143,87 @@ jobs:
               }
 
               override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
-                  ErrorCollector.log("VoiceService -> onStartCommand")
-                  listen(300L)
                   return START_STICKY
               }
 
               private fun initSR() {
                   h.post {
                       try {
-                          ErrorCollector.log("راه‌اندازی SpeechRecognizer...")
+                          ErrorCollector.log("ایجاد SpeechRecognizer با کامپوننت سیستم...")
                           sr?.destroy()
-                          sr = SpeechRecognizer.createSpeechRecognizer(this)
+                          
+                          // استفاده از سرویس صوتی پیش‌فرض دستگاه برای جلوگیری از فریز شدن
+                          sr = if (SpeechRecognizer.isRecognitionAvailable(this)) {
+                              SpeechRecognizer.createSpeechRecognizer(this)
+                          } else {
+                              SpeechRecognizer.createSpeechRecognizer(this, ComponentName.unflattenFromString("com.google.android.googlequicksearchbox/com.google.android.voicesearch.serviceapi.GoogleRecognitionService"))
+                          }
+
                           rIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                               putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                               putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
+                              putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
                               putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                           }
+
                           sr?.setRecognitionListener(object : RecognitionListener {
-                              override fun onReadyForSpeech(b: Bundle?) { ErrorCollector.log("🎤 میکروفون آماده شنیدن است") }
-                              override fun onBeginningOfSpeech() { ErrorCollector.log("🗣️ صدای کاربر شروع شد") }
+                              override fun onReadyForSpeech(b: Bundle?) { ErrorCollector.log("🎤 [میکروفون] آماده شنیدن است") }
+                              override fun onBeginningOfSpeech() { ErrorCollector.log("🗣️ [صدا] تشخیص شروع صحبت کاربر") }
                               override fun onRmsChanged(v: Float) {}
                               override fun onBufferReceived(b: ByteArray?) {}
-                              override fun onEndOfSpeech() { ErrorCollector.log("⏳ پایان صحبت کاربر") }
+                              override fun onEndOfSpeech() { ErrorCollector.log("⏳ [پایان] اتمام صحبت") }
                               override fun onError(e: Int) {
-                                  ErrorCollector.log("⚠️ خطای تشخیص گفتار (کد خطا: $e)")
-                                  if (e == 8 || e == 5) initSR()
-                                  listen(if (e == 8) 1000L else 400L)
+                                  ErrorCollector.log("⚠️ [خطای میکروفون] کد خطا: $e (توضیح: ${getErrDesc(e)})")
+                                  // ری‌استارت خودکار در صورت خطا
+                                  h.postDelayed({ listen() }, 1000L)
                               }
                               override fun onResults(b: Bundle?) {
                                   val txt = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
-                                  ErrorCollector.log("✅ متن دریافت شد: «$txt»")
-                                  listen(400L)
+                                  ErrorCollector.log("✅ [دستور دریافت شد]: «$txt»")
+                                  speak("شنیدم")
+                                  listen()
                               }
                               override fun onPartialResults(b: Bundle?) {
                                   val p = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
-                                  if (p.isNotEmpty()) ErrorCollector.log("👂 شنیده شد: $p")
+                                  if (p.isNotEmpty()) ErrorCollector.log("👂 [در حال شنیدن]: $p")
                               }
                               override fun onEvent(t: Int, b: Bundle?) {}
                           })
-                          ErrorCollector.log("SpeechRecognizer با موفقیت تنظیم شد.")
-                          listen(300L)
+
+                          ErrorCollector.log("تنظیمات listener انجام شد. استارت لیسین...")
+                          listen()
+
                       } catch (e: Exception) {
-                          ErrorCollector.log("❌ خطا در ساخت SpeechRecognizer: ${e.message}")
+                          ErrorCollector.log("❌ خطای بحرانی در initSR: ${e.message}")
                       }
                   }
               }
 
-              private fun listen(delay: Long) {
-                  h.removeCallbacksAndMessages(null)
-                  h.postDelayed({
+              private fun listen() {
+                  h.post {
                       try {
                           sr?.cancel()
                           sr?.startListening(rIntent)
-                          ErrorCollector.log("درخواست startListening ارسال شد.")
+                          ErrorCollector.log("دستور startListening ارسال شد.")
                       } catch (e: Exception) {
                           ErrorCollector.log("❌ خطا در startListening: ${e.message}")
-                          initSR()
                       }
-                  }, delay)
+                  }
+              }
+
+              private fun getErrDesc(code: Int): String {
+                  return when(code) {
+                      1 -> "ERROR_NETWORK_TIMEOUT"
+                      2 -> "ERROR_NETWORK (اینترنت یا DNS قطع است)"
+                      3 -> "ERROR_AUDIO (خطای سخت‌افزاری میکروفون)"
+                      4 -> "ERROR_SERVER (سرور پاسخ نمی‌دهد)"
+                      5 -> "ERROR_CLIENT"
+                      6 -> "ERROR_SPEECH_TIMEOUT (سکوت طولانی)"
+                      7 -> "ERROR_NO_MATCH (چیزی شنیده نشد)"
+                      8 -> "ERROR_RECOGNIZER_BUSY (میکروفون درگیر است)"
+                      9 -> "ERROR_INSUFFICIENT_PERMISSIONS"
+                      else -> "ناشناخته"
+                  }
               }
 
               private fun startFg() {
@@ -226,31 +233,26 @@ jobs:
                           mgr.createNotificationChannel(NotificationChannel("DanaCh", "Dana", NotificationManager.IMPORTANCE_LOW))
                       }
                       val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "DanaCh") else @Suppress("DEPRECATION") Notification.Builder(this)
-                      val n = b.setContentTitle("دانا").setContentText("در حال گزارش‌گیری...").setSmallIcon(android.R.drawable.ic_btn_speak_now).build()
+                      val n = b.setContentTitle("دانا").setContentText("در حال رصد صدا...").setSmallIcon(android.R.drawable.ic_btn_speak_now).build()
                       if (Build.VERSION.SDK_INT >= 30) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) else startForeground(101, n)
-                      ErrorCollector.log("Foreground Service استارت شد.")
-                  } catch (e: Exception) {
-                      ErrorCollector.log("❌ خطا در Foreground Service: ${e.message}")
-                  }
+                  } catch (e: Exception) {}
+              }
+
+              private fun speak(msg: String) {
+                  tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "id")
               }
 
               override fun onInit(s: Int) {
-                  if (s == TextToSpeech.SUCCESS) {
-                      tts?.setLanguage(Locale("fa", "IR"))
-                      ErrorCollector.log("موتور TTS با موفقیت آماده شد.")
-                  } else {
-                      ErrorCollector.log("⚠️ خطا در راه‌اندازی موتور TTS")
-                  }
+                  if (s == TextToSpeech.SUCCESS) tts?.setLanguage(Locale("fa", "IR"))
               }
 
               override fun onDestroy() {
-                  ErrorCollector.log("VoiceService -> onDestroy")
                   h.removeCallbacksAndMessages(null)
                   sr?.destroy()
                   tts?.shutdown()
                   super.onDestroy()
               }
-              override fun onBind(i: Intent?): IBinder? = null
+              override fun onBind(intent: Intent?): IBinder? = null
           }
           EOF
 
