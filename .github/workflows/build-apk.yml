@@ -19,7 +19,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Fixed Dana Code with Imports
+      - name: Generate Stable Dana Code
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -74,7 +74,7 @@ jobs:
                   }
 
                   val title = TextView(this).apply {
-                      text = "دستیار صوتی هوشمند دانا (نسخه نهایی)"
+                      text = "دستیار صوتی هوشمند دانا (نسخه پایدار)"
                       textSize = 18f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
@@ -142,22 +142,29 @@ jobs:
                   super.onCreate()
                   tts = TextToSpeech(this, this)
                   startFg()
-                  initSR()
+                  initRecognizerIntent()
+                  startListeningCycle()
               }
 
               override fun onStartCommand(i: Intent?, f: Int, id: Int): Int = START_STICKY
 
-              private fun initSR() {
+              private fun initRecognizerIntent() {
+                  rIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                      putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                      putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
+                      putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                  }
+              }
+
+              // ایجاد و شروع تازه SpeechRecognizer برای جلوگیری از قفل شدن در پس‌زمینه
+              private fun startListeningCycle() {
                   h.post {
                       try {
                           sr?.destroy()
-                          sr = SpeechRecognizer.createSpeechRecognizer(this)
-                          rIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                              putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                              putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
-                              putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                          }
+                      } catch (e: Exception) {}
 
+                      try {
+                          sr = SpeechRecognizer.createSpeechRecognizer(this)
                           sr?.setRecognitionListener(object : RecognitionListener {
                               override fun onReadyForSpeech(b: Bundle?) {
                                   if (!isAwake) ErrorCollector.log("💤 در انتظار کلمه «دانا»...")
@@ -167,9 +174,12 @@ jobs:
                               override fun onRmsChanged(v: Float) {}
                               override fun onBufferReceived(b: ByteArray?) {}
                               override fun onEndOfSpeech() {}
+                              
                               override fun onError(e: Int) {
-                                  listen(if (isAwake) 500L else 1500L)
+                                  // هر زمان خطای تایم‌آوت یا سکوت داد، بلافاصله چرخه را بازسازی کن
+                                  h.postDelayed({ startListeningCycle() }, 500L)
                               }
+
                               override fun onResults(b: Bundle?) {
                                   val txt = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.replace("ي", "ی")?.replace("ك", "ک")?.trim() ?: ""
                                   if (txt.isNotEmpty()) {
@@ -179,9 +189,20 @@ jobs:
                                               ErrorCollector.log("🟢 بیدار شدم: $txt")
                                               speak("جانم؟")
                                               val cmd = txt.substringAfter("دانا").trim()
-                                              if (cmd.isNotEmpty()) handleCmd(cmd) else listen(500L)
+                                              if (cmd.isNotEmpty()) {
+                                                  handleCmd(cmd)
+                                              } else {
+                                                  // اگر فقط گفت دانا، کمی منتظر بمان
+                                                  h.postDelayed({
+                                                      if (isAwake) {
+                                                          isAwake = false
+                                                          startListeningCycle()
+                                                      }
+                                                  }, 4000L)
+                                                  h.postDelayed({ startListeningCycle() }, 500L)
+                                              }
                                           } else {
-                                              listen(1000L)
+                                              startListeningCycle()
                                           }
                                       } else {
                                           ErrorCollector.log("✅ فرمان دریافتی: «$txt»")
@@ -189,31 +210,26 @@ jobs:
                                           handleCmd(txt)
                                       }
                                   } else {
-                                      listen(1000L)
+                                      startListeningCycle()
                                   }
                               }
+
                               override fun onPartialResults(b: Bundle?) {
                                   val p = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.replace("ي", "ی")?.replace("ك", "ک")?.trim() ?: ""
                                   if (!isAwake && p.contains("دانا")) {
                                       isAwake = true
-                                      ErrorCollector.log("🟢 بیدار شدم: $p")
+                                      ErrorCollector.log("🟢 بیدار شدم (پارتیال): $p")
                                       speak("جانم؟")
                                   }
                               }
+
                               override fun onEvent(t: Int, b: Bundle?) {}
                           })
-                          listen(1000L)
-                      } catch (e: Exception) {}
-                  }
-              }
-
-              private fun listen(delay: Long = 1000L) {
-                  h.postDelayed({
-                      try {
-                          sr?.cancel()
                           sr?.startListening(rIntent)
-                      } catch (e: Exception) { initSR() }
-                  }, delay)
+                      } catch (e: Exception) {
+                          h.postDelayed({ startListeningCycle() }, 2000L)
+                      }
+                  }
               }
 
               private fun handleCmd(raw: String) {
@@ -284,8 +300,8 @@ jobs:
                       }
                   }
 
-                  isAwake = false
-                  listen(2000L)
+                  // بازگشت به چرخه گوش دادن بعد از اجرای دستور
+                  h.postDelayed({ startListeningCycle() }, 1500L)
               }
 
               private fun callContactByName(name: String) {
@@ -336,7 +352,7 @@ jobs:
                   for (a in packageManager.getInstalledApplications(0)) {
                       val label = packageManager.getApplicationLabel(a).toString().lowercase()
                       if (label.contains(name.lowercase())) {
-                          packageManager.getLaunchIntentForPackage(a.packageName)?.let {
+                        packageManager.getLaunchIntentForPackage(a.packageName)?.let {
                               startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                               return true
                           }
@@ -365,7 +381,7 @@ jobs:
 
               override fun onDestroy() {
                   h.removeCallbacksAndMessages(null)
-                  sr?.destroy()
+                  try { sr?.destroy() } catch (e: Exception) {}
                   tts?.shutdown()
                   super.onDestroy()
               }
