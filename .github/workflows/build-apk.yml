@@ -18,7 +18,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Diagnostic Code v2
+      - name: Generate Complete Final Dana Code
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -34,19 +34,22 @@ jobs:
           import android.app.*
           import android.content.*
           import android.content.pm.*
+          import android.hardware.camera2.CameraManager
           import android.graphics.Color
           import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
           import android.os.*
+          import android.provider.*
           import android.speech.*
           import android.speech.tts.TextToSpeech
           import android.view.Gravity
           import android.widget.*
-          import java.util.Locale
+          import java.text.SimpleDateFormat
+          import java.util.*
 
           object ErrorCollector {
               private val logs = StringBuilder()
               var updateView: ((String) -> Unit)? = null
-
               fun log(msg: String) {
                   val timeLog = "[${System.currentTimeMillis() % 100000}] $msg\n"
                   logs.append(timeLog)
@@ -69,7 +72,7 @@ jobs:
                   }
 
                   val title = TextView(this).apply {
-                      text = "رادار عیب‌یاب دانا (نسخه ۲)"
+                      text = "دستیار صوتی هوشمند دانا (نسخه کامل)"
                       textSize = 18f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
@@ -90,13 +93,13 @@ jobs:
                   }
 
                   val btnCopy = Button(this).apply {
-                      text = "کپی کردن گزارش جدید"
+                      text = "کپی گزارش وضعیت"
                       setTextColor(Color.WHITE)
                       background = GradientDrawable().apply { setColor(Color.parseColor("#1E88E5")); cornerRadius = 20f }
                       setOnClickListener {
-                          val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                          clipboard.setPrimaryClip(ClipData.newPlainText("DanaLogs", ErrorCollector.getLogs()))
-                          Toast.makeText(this@MainActivity, "گزارش کپی شد!", Toast.LENGTH_SHORT).show()
+                          val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                          cb.setPrimaryClip(ClipData.newPlainText("Logs", ErrorCollector.getLogs()))
+                          Toast.makeText(this@MainActivity, "کپی شد!", Toast.LENGTH_SHORT).show()
                       }
                   }
 
@@ -108,7 +111,7 @@ jobs:
               }
 
               private fun checkPerms() {
-                  val p = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
+                  val p = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE, Manifest.permission.CAMERA)
                   if (Build.VERSION.SDK_INT >= 33) p.add(Manifest.permission.POST_NOTIFICATIONS)
                   val missing = p.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
                   if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 100) else startDana()
@@ -118,9 +121,7 @@ jobs:
                   try {
                       val i = Intent(this, VoiceService::class.java)
                       if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-                  } catch (e: Exception) {
-                      ErrorCollector.log("خطا در استارت سرویس: ${e.message}")
-                  }
+                  } catch (e: Exception) { ErrorCollector.log("خطا: ${e.message}") }
               }
 
               override fun onRequestPermissionsResult(c: Int, p: Array<out String>, r: IntArray) {
@@ -136,106 +137,219 @@ jobs:
 
               override fun onCreate() {
                   super.onCreate()
-                  ErrorCollector.log("VoiceService -> onCreate")
                   tts = TextToSpeech(this, this)
                   startFg()
                   initSR()
               }
 
-              override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
-                  return START_STICKY
-              }
+              override fun onStartCommand(i: Intent?, f: Int, id: Int): Int = START_STICKY
 
               private fun initSR() {
                   h.post {
                       try {
-                          ErrorCollector.log("ایجاد SpeechRecognizer با کامپوننت سیستم...")
                           sr?.destroy()
-                          
-                          // استفاده از سرویس صوتی پیش‌فرض دستگاه برای جلوگیری از فریز شدن
-                          sr = if (SpeechRecognizer.isRecognitionAvailable(this)) {
-                              SpeechRecognizer.createSpeechRecognizer(this)
-                          } else {
-                              SpeechRecognizer.createSpeechRecognizer(this, ComponentName.unflattenFromString("com.google.android.googlequicksearchbox/com.google.android.voicesearch.serviceapi.GoogleRecognitionService"))
-                          }
-
+                          sr = SpeechRecognizer.createSpeechRecognizer(this)
                           rIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                               putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                               putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
-                              putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
                               putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                           }
 
                           sr?.setRecognitionListener(object : RecognitionListener {
-                              override fun onReadyForSpeech(b: Bundle?) { ErrorCollector.log("🎤 [میکروفون] آماده شنیدن است") }
-                              override fun onBeginningOfSpeech() { ErrorCollector.log("🗣️ [صدا] تشخیص شروع صحبت کاربر") }
+                              override fun onReadyForSpeech(b: Bundle?) { ErrorCollector.log("🎤 آماده گوش دادن...") }
+                              override fun onBeginningOfSpeech() { ErrorCollector.log("🗣️ در حال صحبت...") }
                               override fun onRmsChanged(v: Float) {}
                               override fun onBufferReceived(b: ByteArray?) {}
-                              override fun onEndOfSpeech() { ErrorCollector.log("⏳ [پایان] اتمام صحبت") }
+                              override fun onEndOfSpeech() {}
                               override fun onError(e: Int) {
-                                  ErrorCollector.log("⚠️ [خطای میکروفون] کد خطا: $e (توضیح: ${getErrDesc(e)})")
-                                  // ری‌استارت خودکار در صورت خطا
-                                  h.postDelayed({ listen() }, 1000L)
+                                  if (e != 7 && e != 6) ErrorCollector.log("⚠️ خطا: $e")
+                                  listen(if (e == 8) 1000L else 300L)
                               }
                               override fun onResults(b: Bundle?) {
                                   val txt = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
-                                  ErrorCollector.log("✅ [دستور دریافت شد]: «$txt»")
-                                  speak("شنیدم")
-                                  listen()
+                                  if (txt.isNotEmpty()) {
+                                      ErrorCollector.log("✅ فرمان دریافتی: «$txt»")
+                                      handleCmd(txt)
+                                  } else {
+                                      listen(300L)
+                                  }
                               }
                               override fun onPartialResults(b: Bundle?) {
                                   val p = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
-                                  if (p.isNotEmpty()) ErrorCollector.log("👂 [در حال شنیدن]: $p")
+                                  if (p.isNotEmpty()) ErrorCollector.log("👂 شنیده شد: $p")
                               }
                               override fun onEvent(t: Int, b: Bundle?) {}
                           })
-
-                          ErrorCollector.log("تنظیمات listener انجام شد. استارت لیسین...")
                           listen()
-
-                      } catch (e: Exception) {
-                          ErrorCollector.log("❌ خطای بحرانی در initSR: ${e.message}")
-                      }
+                      } catch (e: Exception) {}
                   }
               }
 
-              private fun listen() {
-                  h.post {
+              private fun listen(delay: Long = 200L) {
+                  h.postDelayed({
                       try {
                           sr?.cancel()
                           sr?.startListening(rIntent)
-                          ErrorCollector.log("دستور startListening ارسال شد.")
-                      } catch (e: Exception) {
-                          ErrorCollector.log("❌ خطا در startListening: ${e.message}")
+                      } catch (e: Exception) { initSR() }
+                  }, delay)
+              }
+
+              private fun handleCmd(raw: String) {
+                  val t = raw.replace("ي", "ی").replace("ك", "ک").trim()
+
+                  when {
+                      // ۱. ارسال پیام در پیام‌رسان‌ها (ایتا، روبیکا، تلگرام)
+                      t.contains("پیام") || t.contains("بگو") || t.contains("ارسال کن") -> {
+                          val pkg = when {
+                              t.contains("ایتا") -> "ir.eitaa.messenger"
+                              t.contains("روبیکا") -> "app.rbnet.rubika"
+                              t.contains("تلگرام") -> "org.telegram.messenger"
+                              else -> "ir.eitaa.messenger"
+                          }
+                          val appNameFa = when(pkg) {
+                              "ir.eitaa.messenger" -> "ایتا"
+                              "app.rbnet.rubika" -> "روبیکا"
+                              else -> "تلگرام"
+                          }
+                          var msg = t.substringAfter("بگو").substringAfter("پیام").trim()
+                          speak("در حال ارسال در $appNameFa")
+                          try {
+                              val intent = Intent().apply {
+                                  action = Intent.ACTION_SEND
+                                  putExtra(Intent.EXTRA_TEXT, msg.ifEmpty { "سلام" })
+                                  type = "text/plain"
+                                  setPackage(pkg)
+                                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                              }
+                              startActivity(intent)
+                          } catch (e: Exception) {
+                              packageManager.getLaunchIntentForPackage(pkg)?.let {
+                                  it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                  startActivity(it)
+                              }
+                          }
+                      }
+
+                      // ۲. کنترل چراغ قوه
+                      t.contains("چراغ قوه") || t.contains("فلش") -> {
+                          if (t.contains("خاموش")) {
+                              setFlashlight(false)
+                              speak("چراغ قوه خاموش شد")
+                          } else {
+                              setFlashlight(true)
+                              speak("چراغ قوه روشن شد")
+                          }
+                      }
+
+                      // ۳. تنظیم زنگ ساعت
+                      t.contains("زنگ ساعت") || t.contains("آلارم") -> {
+                          var hour = 7; var min = 0
+                          val nums = t.replace(Regex("[^0-9]"), " ").trim().split(Regex("\\s+"))
+                          if (nums.isNotEmpty() && nums[0].isNotEmpty()) hour = nums[0].toIntOrNull() ?: 7
+                          if (nums.size > 1 && nums[1].isNotEmpty()) min = nums[1].toIntOrNull() ?: 0
+                          speak("زنگ ساعت برای ساعت $hour و $min تنظیم شد")
+                          val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                              putExtra(AlarmClock.EXTRA_HOUR, hour)
+                              putExtra(AlarmClock.EXTRA_MINUTES, min)
+                              putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          }
+                          try { startActivity(intent) } catch (e: Exception) {}
+                      }
+
+                      // ۴. تنظیم تایمر
+                      t.contains("تایمر") -> {
+                          var sec = 60
+                          val nums = t.replace(Regex("[^0-9]"), " ").trim().split(Regex("\\s+"))
+                          if (nums.isNotEmpty() && nums[0].isNotEmpty()) {
+                              val n = nums[0].toIntOrNull() ?: 1
+                              sec = if (t.contains("ساعت")) n * 3600 else n * 60
+                          }
+                          speak("تایمر تنظیم شد")
+                          val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                              putExtra(AlarmClock.EXTRA_LENGTH, sec)
+                              putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          }
+                          try { startActivity(intent) } catch (e: Exception) {}
+                      }
+
+                      // ۵. وای‌فای و بلوتوث
+                      t.contains("وای فای") || t.contains("اینترنت") -> {
+                          speak("تنظیمات وای‌فای")
+                          startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                      }
+                      t.contains("بلوتوث") -> {
+                          speak("تنظیمات بلوتوث")
+                          startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                      }
+
+                      // ۶. اعلام ساعت
+                      t.contains("ساعت") -> {
+                          val time = SimpleDateFormat("HH:mm", Locale("fa", "IR")).format(Date())
+                          speak("ساعت اکنون $time است")
+                      }
+
+                      // ۷. جستجو در گوگل و آب و هوا
+                      t.contains("جستجو") || t.contains("سرچ") -> {
+                          val q = t.replace("دانا", "").replace("جستجو کن", "").replace("سرچ کن", "").trim()
+                          speak("در حال جستجو")
+                          startActivity(Intent(Intent.ACTION_WEB_SEARCH).apply {
+                              putExtra(SearchManager.QUERY, q)
+                              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          })
+                      }
+                      t.contains("آب و هوا") || t.contains("هوا") -> {
+                          speak("بررسی آب و هوا")
+                          startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=آب+و+هوا")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                      }
+
+                      // ۸. باز کردن برنامه‌ها
+                      t.contains("باز کن") || t.contains("اجرا کن") -> {
+                          val app = t.replace("دانا", "").replace("برنامه", "").replace("را باز کن", "").replace("رو باز کن", "").replace("باز کن", "").trim()
+                          if (openApp(app)) speak("باز شد") else speak("برنامه پیدا نشد")
+                      }
+
+                      // ۹. تماس صوتی
+                      t.contains("زنگ بزن") || t.contains("تماس") -> {
+                          val name = t.replace("دانا", "").replace("به", "").replace("با", "").replace("زنگ بزن", "").replace("تماس", "").trim()
+                          call(name)
                       }
                   }
+                  listen(1200L)
               }
 
-              private fun getErrDesc(code: Int): String {
-                  return when(code) {
-                      1 -> "ERROR_NETWORK_TIMEOUT"
-                      2 -> "ERROR_NETWORK (اینترنت یا DNS قطع است)"
-                      3 -> "ERROR_AUDIO (خطای سخت‌افزاری میکروفون)"
-                      4 -> "ERROR_SERVER (سرور پاسخ نمی‌دهد)"
-                      5 -> "ERROR_CLIENT"
-                      6 -> "ERROR_SPEECH_TIMEOUT (سکوت طولانی)"
-                      7 -> "ERROR_NO_MATCH (چیزی شنیده نشد)"
-                      8 -> "ERROR_RECOGNIZER_BUSY (میکروفون درگیر است)"
-                      9 -> "ERROR_INSUFFICIENT_PERMISSIONS"
-                      else -> "ناشناخته"
-                  }
-              }
-
-              private fun startFg() {
+              private fun setFlashlight(on: Boolean) {
                   try {
-                      val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                      if (Build.VERSION.SDK_INT >= 26) {
-                          mgr.createNotificationChannel(NotificationChannel("DanaCh", "Dana", NotificationManager.IMPORTANCE_LOW))
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                          val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                          cm.setTorchMode(cm.cameraIdList[0], on)
                       }
-                      val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "DanaCh") else @Suppress("DEPRECATION") Notification.Builder(this)
-                      val n = b.setContentTitle("دانا").setContentText("در حال رصد صدا...").setSmallIcon(android.R.drawable.ic_btn_speak_now).build()
-                      if (Build.VERSION.SDK_INT >= 30) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) else startForeground(101, n)
                   } catch (e: Exception) {}
+              }
+
+              private fun openApp(name: String): Boolean {
+                  if (name.isEmpty()) return false
+                  for (a in packageManager.getInstalledApplications(0)) {
+                      if (packageManager.getApplicationLabel(a).toString().lowercase().contains(name.lowercase())) {
+                          packageManager.getLaunchIntentForPackage(a.packageName)?.let {
+                              startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                              return true
+                          }
+                      }
+                  }
+                  return false
+              }
+
+              private fun call(name: String) {
+                  if (name.isEmpty()) return
+                  val c = contentResolver.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI, null, "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?", arrayOf("%$name%"), null)
+                  c?.use {
+                      if (it.moveToFirst()) {
+                          val num = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
+                          startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:$num")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                      }
+                  }
               }
 
               private fun speak(msg: String) {
@@ -246,13 +360,21 @@ jobs:
                   if (s == TextToSpeech.SUCCESS) tts?.setLanguage(Locale("fa", "IR"))
               }
 
+              private fun startFg() {
+                  val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                  if (Build.VERSION.SDK_INT >= 26) mgr.createNotificationChannel(NotificationChannel("DanaCh", "Dana", NotificationManager.IMPORTANCE_LOW))
+                  val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "DanaCh") else @Suppress("DEPRECATION") Notification.Builder(this)
+                  val n = b.setContentTitle("دستیار دانا").setContentText("در حال شنود...").setSmallIcon(android.R.drawable.ic_btn_speak_now).build()
+                  if (Build.VERSION.SDK_INT >= 30) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) else startForeground(101, n)
+              }
+
               override fun onDestroy() {
                   h.removeCallbacksAndMessages(null)
                   sr?.destroy()
                   tts?.shutdown()
                   super.onDestroy()
               }
-              override fun onBind(intent: Intent?): IBinder? = null
+              override fun onBind(i: Intent?): IBinder? = null
           }
           EOF
 
