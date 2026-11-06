@@ -1,5 +1,4 @@
 name: Build Dana APK
-
 on:
   push:
     branches: [ "main", "master" ]
@@ -9,408 +8,249 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Complete Kotlin & Manifest Files
+      - name: Generate Reporter Code
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
             if [ -n "$SUBDIR" ]; then cd "$SUBDIR"; fi
           fi
-
-          # پاک کردن فایل‌های ناقص قبلی
           find app/src/main -type f -name "*.kt" -delete
           mkdir -p app/src/main/java/ir/dana/assistant
 
-          # ساخت خودکار فایل کامل MainActivity.kt روی سرور
           cat << 'EOF' > app/src/main/java/ir/dana/assistant/MainActivity.kt
           package ir.dana.assistant
 
           import android.Manifest
-          import android.app.Activity
-          import android.app.Notification
-          import android.app.NotificationChannel
-          import android.app.NotificationManager
-          import android.app.Service
-          import android.content.Context
-          import android.content.Intent
-          import android.content.pm.PackageManager
-          import android.content.pm.ServiceInfo
-          import android.database.Cursor
+          import android.app.*
+          import android.content.*
+          import android.content.pm.*
           import android.graphics.Color
           import android.graphics.drawable.GradientDrawable
-          import android.media.AudioManager
           import android.net.Uri
-          import android.os.Build
-          import android.os.Bundle
-          import android.os.Handler
-          import android.os.IBinder
-          import android.os.Looper
-          import android.provider.ContactsContract
-          import android.provider.Settings
-          import android.speech.RecognitionListener
-          import android.speech.RecognizerIntent
-          import android.speech.SpeechRecognizer
+          import android.os.*
+          import android.provider.*
+          import android.speech.*
           import android.speech.tts.TextToSpeech
-          import android.speech.tts.UtteranceProgressListener
           import android.view.Gravity
-          import android.widget.Button
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import android.widget.Toast
+          import android.widget.*
           import java.util.Locale
 
+          object ErrorCollector {
+              private val logs = StringBuilder()
+              var updateView: ((String) -> Unit)? = null
+
+              fun log(msg: String) {
+                  val timeLog = "[${System.currentTimeMillis() % 100000}] $msg\n"
+                  logs.append(timeLog)
+                  android.util.Log.d("DanaReport", msg)
+                  updateView?.invoke(logs.toString())
+              }
+              fun getLogs(): String = logs.toString()
+          }
+
           class MainActivity : Activity() {
-              private lateinit var statusText: TextView
+              private lateinit var logBox: EditText
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-
-                  val rootLayout = LinearLayout(this).apply {
+                  val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       setBackgroundColor(Color.parseColor("#121212"))
-                      setPadding(64, 64, 64, 64)
+                      setPadding(32, 32, 32, 32)
                   }
 
-                  val titleText = TextView(this).apply {
-                      text = "دستیار هوشمند دانا"
-                      textSize = 26f
-                      setTextColor(Color.parseColor("#FFFFFF"))
-                      gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 24)
-                  }
-
-                  statusText = TextView(this).apply {
-                      text = "وضعیت: در حال آماده‌سازی..."
-                      textSize = 15f
-                      setTextColor(Color.parseColor("#B0B0B0"))
-                      gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 72)
-                  }
-
-                  val startButton = Button(this).apply {
-                      text = "فعال‌سازی دستیار در پس‌زمینه"
-                      textSize = 16f
+                  val title = TextView(this).apply {
+                      text = "گزارش‌گر خطاهای دستیار دانا"
+                      textSize = 18f
                       setTextColor(Color.WHITE)
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#1E88E5"))
-                          cornerRadius = 32f
-                      }
-                      setPadding(48, 32, 48, 32)
-                      setOnClickListener { checkPermissionsAndStart() }
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 20)
                   }
 
-                  val stopButton = Button(this).apply {
-                      text = "توقف کامل دستیار"
-                      textSize = 15f
+                  logBox = EditText(this).apply {
+                      textSize = 13f
+                      setTextColor(Color.parseColor("#00E676"))
+                      setBackgroundColor(Color.parseColor("#1E1E1E"))
+                      setPadding(20, 20, 20, 20)
+                      isFocusable = false
+                      isClickable = true
+                  }
+                  val scroll = ScrollView(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+                      addView(logBox)
+                  }
+
+                  val btnCopy = Button(this).apply {
+                      text = "کپی کردن گزارش خطاها"
                       setTextColor(Color.WHITE)
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#E53935"))
-                          cornerRadius = 32f
-                      }
-                      setPadding(48, 28, 48, 28)
-                      layoutParams = LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.WRAP_CONTENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      ).apply { topMargin = 40 }
+                      background = GradientDrawable().apply { setColor(Color.parseColor("#1E88E5")); cornerRadius = 20f }
                       setOnClickListener {
-                          stopService(Intent(this@MainActivity, VoiceService::class.java))
-                          statusText.text = "وضعیت: دستیار متوقف شد."
-                          Toast.makeText(this@MainActivity, "دستیار غیرفعال شد", Toast.LENGTH_SHORT).show()
+                          val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                          clipboard.setPrimaryClip(ClipData.newPlainText("DanaLogs", ErrorCollector.getLogs()))
+                          Toast.makeText(this@MainActivity, "گزارش خطاها کپی شد!", Toast.LENGTH_SHORT).show()
                       }
                   }
 
-                  rootLayout.addView(titleText)
-                  rootLayout.addView(statusText)
-                  rootLayout.addView(startButton)
-                  rootLayout.addView(stopButton)
-                  setContentView(rootLayout)
+                  layout.addView(title)
+                  layout.addView(scroll)
+                  layout.addView(btnCopy)
+                  setContentView(layout)
 
-                  checkPermissionsAndStart()
+                  ErrorCollector.updateView = { text -> runOnUiThread { logBox.setText(text); scroll.fullScroll(ScrollView.FOCUS_DOWN) } }
+                  ErrorCollector.log("برنامه باز شد. در حال بررسی مجوزها...")
+
+                  checkPerms()
               }
 
-              private fun checkPermissionsAndStart() {
-                  val perms = mutableListOf(
-                      Manifest.permission.RECORD_AUDIO,
-                      Manifest.permission.READ_CONTACTS,
-                      Manifest.permission.CALL_PHONE
-                  )
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                      perms.add(Manifest.permission.POST_NOTIFICATIONS)
-                  }
-                  val missing = perms.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+              private fun checkPerms() {
+                  val p = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
+                  if (Build.VERSION.SDK_INT >= 33) p.add(Manifest.permission.POST_NOTIFICATIONS)
+                  val missing = p.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
                   if (missing.isNotEmpty()) {
+                      ErrorCollector.log("درخواست مجوزهای گمشده...")
                       requestPermissions(missing.toTypedArray(), 100)
                   } else {
-                      startDanaService()
+                      ErrorCollector.log("همه مجوزها تایید شده‌اند. استارت سرویس...")
+                      startDana()
                   }
               }
 
-              private fun startDanaService() {
-                  val serviceIntent = Intent(this, VoiceService::class.java)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      startForegroundService(serviceIntent)
-                  } else {
-                      startService(serviceIntent)
+              private fun startDana() {
+                  try {
+                      val i = Intent(this, VoiceService::class.java)
+                      if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                      ErrorCollector.log("سرویس پس‌زمینه فراخوانی شد.")
+                  } catch (e: Exception) {
+                      ErrorCollector.log("خطا در استارت سرویس: ${e.message}")
                   }
-                  statusText.text = "دانا فعال است و گوش می‌دهد.\nبگویید: «دانا تنظیمات را باز کن»"
-                  Toast.makeText(this, "دستیار دانا فعال شد", Toast.LENGTH_SHORT).show()
               }
 
-              override fun onRequestPermissionsResult(req: Int, perms: Array<out String>, res: IntArray) {
-                  super.onRequestPermissionsResult(req, perms, res)
-                  if (req == 100) startDanaService()
+              override fun onRequestPermissionsResult(c: Int, p: Array<out String>, r: IntArray) {
+                  if (c == 100) {
+                      ErrorCollector.log("نتیجه مجوزها دریافت شد. استارت سرویس...")
+                      startDana()
+                  }
               }
           }
 
           class VoiceService : Service(), TextToSpeech.OnInitListener {
-              private var speechRecognizer: SpeechRecognizer? = null
-              private lateinit var recognizerIntent: Intent
+              private var sr: SpeechRecognizer? = null
+              private lateinit var rIntent: Intent
               private var tts: TextToSpeech? = null
-              private val mainHandler = Handler(Looper.getMainLooper())
-              private var isListening = false
-              private var isSpeaking = false
-              private var isAwake = false
-
-              companion object {
-                  private const val CHANNEL_ID = "DanaChannel"
-                  private const val NOTIF_ID = 101
-              }
+              private val h = Handler(Looper.getMainLooper())
 
               override fun onCreate() {
                   super.onCreate()
+                  ErrorCollector.log("VoiceService -> onCreate")
                   tts = TextToSpeech(this, this)
-                  startForegroundNotif()
-                  setupRecognizer()
-                  startListening(400L)
+                  startFg()
+                  initSR()
               }
 
-              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  if (!isListening && !isSpeaking) startListening(300L)
+              override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
+                  ErrorCollector.log("VoiceService -> onStartCommand")
+                  listen(300L)
                   return START_STICKY
               }
 
-              private fun setupRecognizer() {
-                  mainHandler.post {
+              private fun initSR() {
+                  h.post {
                       try {
-                          speechRecognizer?.destroy()
-                          speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this@VoiceService)
-                          recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                          ErrorCollector.log("راه‌اندازی SpeechRecognizer...")
+                          sr?.destroy()
+                          sr = SpeechRecognizer.createSpeechRecognizer(this)
+                          rIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                               putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                               putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fa-IR")
                               putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                              putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                              putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
-                              putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
                           }
-                          speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-                              override fun onReadyForSpeech(params: Bundle?) { isListening = true }
-                              override fun onBeginningOfSpeech() {}
-                              override fun onRmsChanged(rmsdB: Float) {}
-                              override fun onBufferReceived(buffer: ByteArray?) {}
-                              override fun onEndOfSpeech() { isListening = false }
-
-                              override fun onError(error: Int) {
-                                  isListening = false
-                                  val delay = if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1000L else 250L
-                                  if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
-                                      setupRecognizer()
-                                  }
-                                  if (!isSpeaking) startListening(delay)
+                          sr?.setRecognitionListener(object : RecognitionListener {
+                              override fun onReadyForSpeech(b: Bundle?) { ErrorCollector.log("🎤 میکروفون آماده شنیدن است") }
+                              override fun onBeginningOfSpeech() { ErrorCollector.log("🗣️ صدای کاربر شروع شد") }
+                              override fun onRmsChanged(v: Float) {}
+                              override fun onBufferReceived(b: ByteArray?) {}
+                              override fun onEndOfSpeech() { ErrorCollector.log("⏳ پایان صحبت کاربر") }
+                              override fun onError(e: Int) {
+                                  ErrorCollector.log("⚠️ خطای تشخیص گفتار (کد خطا: $e)")
+                                  if (e == 8 || e == 5) initSR()
+                                  listen(if (e == 8) 1000L else 400L)
                               }
-
-                              override fun onResults(results: Bundle?) {
-                                  isListening = false
-                                  val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim() ?: ""
-                                  if (text.isNotEmpty()) handleInput(text) else if (!isSpeaking) startListening(250L)
+                              override fun onResults(b: Bundle?) {
+                                  val txt = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
+                                  ErrorCollector.log("✅ متن دریافت شد: «$txt»")
+                                  listen(400L)
                               }
-
-                              override fun onPartialResults(partial: Bundle?) {
-                                  val text = partial?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim() ?: ""
-                                  if (!isAwake && (text == "دانا" || text == "جانم دانا")) {
-                                      isAwake = true
-                                      updateNotif("گوش می‌دهم... دستور دهید")
-                                  }
+                              override fun onPartialResults(b: Bundle?) {
+                                  val p = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
+                                  if (p.isNotEmpty()) ErrorCollector.log("👂 شنیده شد: $p")
                               }
-
-                              override fun onEvent(eventType: Int, params: Bundle?) {}
+                              override fun onEvent(t: Int, b: Bundle?) {}
                           })
-                      } catch (e: Exception) {}
+                          ErrorCollector.log("SpeechRecognizer با موفقیت تنظیم شد.")
+                          listen(300L)
+                      } catch (e: Exception) {
+                          ErrorCollector.log("❌ خطا در ساخت SpeechRecognizer: ${e.message}")
+                      }
                   }
               }
 
-              private fun startListening(delay: Long = 200L) {
-                  mainHandler.removeCallbacksAndMessages(null)
-                  mainHandler.postDelayed({
-                      if (!isSpeaking) {
-                          try {
-                              speechRecognizer?.cancel()
-                              speechRecognizer?.startListening(recognizerIntent)
-                          } catch (e: Exception) {
-                              setupRecognizer()
-                              startListening(1000L)
-                          }
+              private fun listen(delay: Long) {
+                  h.removeCallbacksAndMessages(null)
+                  h.postDelayed({
+                      try {
+                          sr?.cancel()
+                          sr?.startListening(rIntent)
+                          ErrorCollector.log("درخواست startListening ارسال شد.")
+                      } catch (e: Exception) {
+                          ErrorCollector.log("❌ خطا در startListening: ${e.message}")
+                          initSR()
                       }
                   }, delay)
               }
 
-              private fun handleInput(rawText: String) {
-                  val text = rawText.replace("ي", "ی").replace("ك", "ک").trim()
-                  if (text == "دانا" || text == "سلام دانا") {
-                      isAwake = true
-                      updateNotif("دانا بیدار است: فرمان دهید...")
-                      speak("جانم")
-                      return
-                  }
-                  if (text.startsWith("دانا ")) {
-                      isAwake = false
-                      executeCmd(text.removePrefix("دانا").trim())
-                      return
-                  }
-                  if (isAwake) {
-                      isAwake = false
-                      executeCmd(text)
-                      return
-                  }
-                  startListening(250L)
-              }
-
-              private fun executeCmd(cmd: String) {
-                  updateNotif("آخرین دستور: $cmd")
-                  when {
-                      cmd.contains("باز کن") || cmd.contains("اجرا کن") -> {
-                          val app = cmd.replace("برنامه", "").replace("اپلیکیشن", "")
-                              .replace("را باز کن", "").replace("رو باز کن", "")
-                              .replace("باز کن", "").replace("اجرا کن", "").trim()
-                          if (openApp(app)) speak("باز شد") else speak("پیدا نشد")
+              private fun startFg() {
+                  try {
+                      val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          mgr.createNotificationChannel(NotificationChannel("DanaCh", "Dana", NotificationManager.IMPORTANCE_LOW))
                       }
-                      cmd.contains("زنگ بزن") || cmd.contains("تماس بگیر") || cmd.startsWith("تماس با") -> {
-                          val name = cmd.replace("به", "").replace("با", "")
-                              .replace("زنگ بزن", "").replace("تماس بگیر", "").replace("تماس", "").trim()
-                          if (callContact(name)) speak("در حال تماس") else speak("مخاطب پیدا نشد")
-                      }
-                      cmd.contains("تنظیمات") -> {
-                          startActivity(Intent(Settings.ACTION_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-                          speak("تنظیمات باز شد")
-                      }
-                      else -> startListening(250L)
+                      val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "DanaCh") else @Suppress("DEPRECATION") Notification.Builder(this)
+                      val n = b.setContentTitle("دانا").setContentText("در حال گزارش‌گیری...").setSmallIcon(android.R.drawable.ic_btn_speak_now).build()
+                      if (Build.VERSION.SDK_INT >= 30) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) else startForeground(101, n)
+                      ErrorCollector.log("Foreground Service استارت شد.")
+                  } catch (e: Exception) {
+                      ErrorCollector.log("❌ خطا در Foreground Service: ${e.message}")
                   }
               }
 
-              private fun openApp(name: String): Boolean {
-                  val pm = packageManager
-                  for (app in pm.getInstalledApplications(0)) {
-                      val label = pm.getApplicationLabel(app).toString().lowercase()
-                      if (label.contains(name.lowercase())) {
-                          val intent = pm.getLaunchIntentForPackage(app.packageName)
-                          if (intent != null) {
-                              intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                              startActivity(intent)
-                              return true
-                          }
-                      }
-                  }
-                  return false
-              }
-
-              private fun callContact(name: String): Boolean {
-                  if (name.isEmpty()) return false
-                  var number: String? = null
-                  val cursor: Cursor? = contentResolver.query(
-                      ContactsContract.CommonDataKinds.Phone.CONTENT_URI, null,
-                      "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
-                      arrayOf("%$name%"), null
-                  )
-                  cursor?.use {
-                      if (it.moveToFirst()) {
-                          val idx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                          if (idx >= 0) number = it.getString(idx)
-                      }
-                  }
-                  return if (!number.isNullOrEmpty()) {
-                      startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
-                          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                      })
-                      true
-                  } else false
-              }
-
-              private fun speak(msg: String) {
-                  if (tts == null) { startListening(250L); return }
-                  isSpeaking = true
-                  mainHandler.post { speechRecognizer?.cancel() }
-                  val params = Bundle().apply { putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "DanaID") }
-                  tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, params, "DanaID")
-                  mainHandler.postDelayed({
-                      if (isSpeaking) { isSpeaking = false; startListening(200L) }
-                  }, 2500L)
-              }
-
-              override fun onInit(status: Int) {
-                  if (status == TextToSpeech.SUCCESS) {
+              override fun onInit(s: Int) {
+                  if (s == TextToSpeech.SUCCESS) {
                       tts?.setLanguage(Locale("fa", "IR"))
-                      tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                          override fun onStart(id: String?) { isSpeaking = true }
-                          override fun onDone(id: String?) { isSpeaking = false; startListening(200L) }
-                          override fun onError(id: String?) { isSpeaking = false; startListening(200L) }
-                      })
-                  }
-              }
-
-              private fun startForegroundNotif() {
-                  val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      mgr.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Dana", NotificationManager.IMPORTANCE_LOW))
-                  }
-                  val notif = buildNotif("دانا فعال است و گوش می‌دهد...")
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                      startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                      ErrorCollector.log("موتور TTS با موفقیت آماده شد.")
                   } else {
-                      startForeground(NOTIF_ID, notif)
+                      ErrorCollector.log("⚠️ خطا در راه‌اندازی موتور TTS")
                   }
-              }
-
-              private fun updateNotif(text: String) {
-                  val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                  mgr.notify(NOTIF_ID, buildNotif(text))
-              }
-
-              private fun buildNotif(text: String): Notification {
-                  val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      Notification.Builder(this, CHANNEL_ID)
-                  } else {
-                      @Suppress("DEPRECATION") Notification.Builder(this)
-                  }
-                  return b.setContentTitle("دستیار هوشمند دانا")
-                      .setContentText(text)
-                      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                      .setOngoing(true)
-                      .build()
               }
 
               override fun onDestroy() {
-                  mainHandler.removeCallbacksAndMessages(null)
-                  speechRecognizer?.destroy()
-                  tts?.stop()
+                  ErrorCollector.log("VoiceService -> onDestroy")
+                  h.removeCallbacksAndMessages(null)
+                  sr?.destroy()
                   tts?.shutdown()
                   super.onDestroy()
               }
-
-              override fun onBind(intent: Intent?): IBinder? = null
+              override fun onBind(i: Intent?): IBinder? = null
           }
           EOF
 
@@ -420,12 +260,7 @@ jobs:
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
             if [ -n "$SUBDIR" ]; then cd "$SUBDIR"; fi
           fi
-          gradle assembleDebug > build_log.txt 2>&1 || {
-            echo "================ علت دقیق خطای کد ================"
-            grep -E "^e: |FAILURE:|What went wrong:" -A 5 build_log.txt || tail -n 40 build_log.txt
-            echo "==================================================="
-            exit 1
-          }
+          gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
