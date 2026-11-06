@@ -19,7 +19,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Direct Activity With Logs
+      - name: Generate Direct Activity With View Import
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -44,7 +44,7 @@ jobs:
           import android.provider.*
           import android.speech.*
           import android.speech.tts.TextToSpeech
-          import android.view.Gravity
+          import android.view.*
           import android.widget.*
           import java.text.SimpleDateFormat
           import java.util.*
@@ -190,7 +190,6 @@ jobs:
                   logsBuilder.append(timeLog)
                   runOnUiThread {
                       logBox.setText(logsBuilder.toString())
-                      // اسکرول به پایین
                       val parent = logBox.parent as? ScrollView
                       parent?.fullScroll(ScrollView.FOCUS_DOWN)
                   }
