@@ -19,7 +19,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate Direct Activity Dana Code
+      - name: Generate Direct Activity With Logs
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -57,6 +57,7 @@ jobs:
               private lateinit var rIntent: Intent
               private var tts: TextToSpeech? = null
               private var isListening = false
+              private val logsBuilder = StringBuilder()
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -65,53 +66,73 @@ jobs:
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       setBackgroundColor(Color.parseColor("#121212"))
-                      setPadding(32, 32, 32, 32)
+                      setPadding(24, 24, 24, 24)
                   }
 
                   val title = TextView(this).apply {
-                      text = "دستیار صوتی دانا (نسخه مستقیم)"
-                      textSize = 20f
+                      text = "دستیار صوتی دانا (با گزارش‌گیر زنده)"
+                      textSize = 18f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 10)
+                      setPadding(0, 0, 0, 8)
                   }
 
                   statusText = TextView(this).apply {
-                      text = "برای شروع روی دکمه بزنید"
-                      textSize = 15f
+                      text = "آماده‌به‌کار - روی دکمه بزنید"
+                      textSize = 14f
                       setTextColor(Color.parseColor("#00E676"))
                       gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 20)
+                      setPadding(0, 0, 0, 12)
+                  }
+
+                  val btnLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
                   }
 
                   btnListen = Button(this).apply {
                       text = "🎤 شروع گوش دادن"
-                      textSize = 16f
+                      textSize = 14f
                       setTextColor(Color.WHITE)
-                      background = GradientDrawable().apply { setColor(Color.parseColor("#1E88E5")); cornerRadius = 30f }
+                      background = GradientDrawable().apply { setColor(Color.parseColor("#1E88E5")); cornerRadius = 25f }
+                      setOnClickListener { toggleListening() }
+                  }
+
+                  val btnCopy = Button(this).apply {
+                      text = "📋 کپی گزارش"
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      background = GradientDrawable().apply { setColor(Color.parseColor("#D32F2F")); cornerRadius = 25f }
                       setOnClickListener {
-                          toggleListening()
+                          val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                          cb.setPrimaryClip(ClipData.newPlainText("DanaLogs", logsBuilder.toString()))
+                          Toast.makeText(this@MainActivity, "گزارش کپی شد!", Toast.LENGTH_SHORT).show()
                       }
                   }
 
+                  btnLayout.addView(btnListen)
+                  val space = View(this).apply { layoutParams = LinearLayout.LayoutParams(16, 0) }
+                  btnLayout.addView(space)
+                  btnLayout.addView(btnCopy)
+
                   logBox = EditText(this).apply {
-                      textSize = 13f
-                      setTextColor(Color.parseColor("#B0BEC5"))
+                      textSize = 12f
+                      setTextColor(Color.parseColor("#00E676"))
                       setBackgroundColor(Color.parseColor("#1E1E1E"))
-                      setPadding(20, 20, 20, 20)
+                      setPadding(16, 16, 16, 16)
                       isFocusable = false
                       isClickable = true
                   }
                   
                   val scroll = ScrollView(this).apply {
                       layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
-                      setPadding(0, 20, 0, 20)
+                      setPadding(0, 16, 0, 0)
                       addView(logBox)
                   }
 
                   layout.addView(title)
                   layout.addView(statusText)
-                  layout.addView(btnListen)
+                  layout.addView(btnLayout)
                   layout.addView(scroll)
                   setContentView(layout)
 
@@ -123,9 +144,7 @@ jobs:
               private fun checkPerms() {
                   val p = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE, Manifest.permission.CAMERA)
                   val missing = p.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-                  if (missing.isNotEmpty()) {
-                      requestPermissions(missing.toTypedArray(), 100)
-                  }
+                  if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 100)
               }
 
               private fun initRecognizer() {
@@ -139,7 +158,7 @@ jobs:
                           putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                       }
                   } catch (e: Exception) {
-                      log("خطا در راه‌اندازی میکروفون: ${e.message}")
+                      log("خطا در راه‌اندازی: ${e.message}")
                   }
               }
 
@@ -148,11 +167,12 @@ jobs:
                       try {
                           sr?.startListening(rIntent)
                           isListening = true
-                          btnListen.text = "⏹️ در حال گوش دادن..."
-                          statusText.text = "فرمان خود را بگویید..."
+                          btnListen.text = "⏹️ توقف"
+                          statusText.text = "گوش می‌دهم..."
+                          log("🎤 شروع شنود صوتی...")
                       } catch (e: Exception) {
                           initRecognizer()
-                          log("خطا در شروع: ${e.message}")
+                          log("خطا در شروع گوش دادن: ${e.message}")
                       }
                   } else {
                       try {
@@ -161,26 +181,32 @@ jobs:
                       isListening = false
                       btnListen.text = "🎤 شروع گوش دادن"
                       statusText.text = "متوقف شد"
+                      log("⏹️ شنود متوقف شد.")
                   }
               }
 
               private fun log(msg: String) {
+                  val timeLog = "[${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}] $msg\n"
+                  logsBuilder.append(timeLog)
                   runOnUiThread {
-                      logBox.append("$msg\n")
+                      logBox.setText(logsBuilder.toString())
+                      // اسکرول به پایین
+                      val parent = logBox.parent as? ScrollView
+                      parent?.fullScroll(ScrollView.FOCUS_DOWN)
                   }
               }
 
-              override fun onReadyForSpeech(params: Bundle?) { log("🎤 آماده دریافت صدا...") }
-              override fun onBeginningOfSpeech() { log("🗣️ در حال صحبت...") }
+              override fun onReadyForSpeech(params: Bundle?) { log("آماده دریافت صدا...") }
+              override fun onBeginningOfSpeech() { log("🗣️ کاربر در حال صحبت است...") }
               override fun onRmsChanged(rmsdB: Float) {}
               override fun onBufferReceived(buffer: ByteArray?) {}
-              override fun onEndOfSpeech() { log("✋ پایان صحبت") }
+              override fun onEndOfSpeech() { log("✋ پایان صحبت کاربر") }
               
               override fun onError(error: Int) {
-                  log("⚠️ خطای صوت: $error")
+                  log("⚠️ خطای تشخیص صدا: $error")
                   isListening = false
                   btnListen.text = "🎤 شروع گوش دادن"
-                  statusText.text = "خطا در تشخیص، دوباره تلاش کنید"
+                  statusText.text = "خطا در تشخیص (کد $error)"
               }
 
               override fun onResults(results: Bundle?) {
@@ -190,11 +216,11 @@ jobs:
                   val txt = matches?.firstOrNull()?.replace("ي", "ی")?.replace("ك", "ک")?.trim() ?: ""
                   
                   if (txt.isNotEmpty()) {
-                      log("✅ فرمان: $txt")
-                      statusText.text = "دستور: $txt"
+                      log("✅ فرمان دریافتی: «$txt»")
+                      statusText.text = "فرمان: $txt"
                       handleCmd(txt)
                   } else {
-                      statusText.text = "چیزی شنیده نشد"
+                      statusText.text = "چیزی تشخیص داده نشد"
                   }
               }
 
@@ -210,7 +236,7 @@ jobs:
 
               private fun handleCmd(raw: String) {
                   val t = raw.replace("دانا", "").trim()
-                  log("⚙️ اجرا: $t")
+                  log("⚙️ در حال اجرای دستور: $t")
 
                   when {
                       t.contains("چراغ قوه") || t.contains("فلش") -> {
@@ -234,7 +260,7 @@ jobs:
                                   putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                                   addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                               })
-                          } catch (e: Exception) {}
+                          } catch (e: Exception) { log("خطا در تنظیم آلارم") }
                       }
                       t.contains("تماس") || t.contains("زنگ بزن") -> {
                           val name = t.replace("تماس بگیر", "").replace("تماس", "").replace("زنگ بزن", "").replace("به", "").replace("با", "").replace("ایرانسل", "").trim()
@@ -249,7 +275,7 @@ jobs:
                                   it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                   startActivity(it)
                               }
-                          } catch (e: Exception) {}
+                          } catch (e: Exception) { log("برنامه پیدا نشد") }
                       }
                       t.contains("بلوتوث") -> {
                           speak("تنظیمات بلوتوث")
@@ -290,6 +316,7 @@ jobs:
                       }
                   } else {
                       speak("مخاطب پیدا نشد")
+                      log("مخاطب $name در دفترچه تلفن یافت نشد")
                   }
               }
 
@@ -299,7 +326,7 @@ jobs:
                           val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
                           cm.setTorchMode(cm.cameraIdList[0], on)
                       }
-                  } catch (e: Exception) {}
+                  } catch (e: Exception) { log("خطا در کنترل چراغ قوه") }
               }
 
               private fun openApp(name: String): Boolean {
@@ -347,4 +374,3 @@ jobs:
         with:
           name: Dana-Assistant-APK
           path: "**/build/outputs/apk/debug/*.apk"
- 
