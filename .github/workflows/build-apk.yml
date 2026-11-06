@@ -18,7 +18,7 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Generate WakeWord Dana Code
+      - name: Generate Ultimate Complete Dana Code
         run: |
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
             SUBDIR=$(find . -maxdepth 2 -name "settings.gradle*" -printf "%h\n" | head -n 1)
@@ -72,8 +72,8 @@ jobs:
                   }
 
                   val title = TextView(this).apply {
-                      text = "دستیار صوتی هوشمند دانا (مدت‌دار با کلمه بیدارباش)"
-                      textSize = 17f
+                      text = "دستیار صوتی هوشمند دانا (نسخه نهایی)"
+                      textSize = 18f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
                       setPadding(0, 0, 0, 20)
@@ -134,7 +134,7 @@ jobs:
               private lateinit var rIntent: Intent
               private var tts: TextToSpeech? = null
               private val h = Handler(Looper.getMainLooper())
-              private var isAwake = false // آیا کلمه "دانا" گفته شده است؟
+              private var isAwake = false
 
               override fun onCreate() {
                   super.onCreate()
@@ -158,61 +158,46 @@ jobs:
 
                           sr?.setRecognitionListener(object : RecognitionListener {
                               override fun onReadyForSpeech(b: Bundle?) {
-                                  if (!isAwake) {
-                                      ErrorCollector.log("💤 در انتظار کلمه «دانا»...")
-                                  } else {
-                                      ErrorCollector.log("🎤 گوش می‌کنم... فرمان خود را بگویید")
-                                  }
+                                  if (!isAwake) ErrorCollector.log("💤 در انتظار کلمه «دانا»...")
+                                  else ErrorCollector.log("🎤 گوش می‌کنم...")
                               }
                               override fun onBeginningOfSpeech() {}
                               override fun onRmsChanged(v: Float) {}
                               override fun onBufferReceived(b: ByteArray?) {}
                               override fun onEndOfSpeech() {}
-                              
                               override fun onError(e: Int) {
-                                  // اگر در حالت خواب بودیم و سکوت شد، با آرامش دوباره گوش بده بدون اینکه لاگ شلوغ شود
                                   listen(if (isAwake) 500L else 1500L)
                               }
-
                               override fun onResults(b: Bundle?) {
                                   val txt = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.replace("ي", "ی")?.replace("ك", "ک")?.trim() ?: ""
                                   if (txt.isNotEmpty()) {
                                       if (!isAwake) {
-                                          // بررسی اینکه آیا کاربر کلمه "دانا" را گفته است
                                           if (txt.contains("دانا")) {
                                               isAwake = true
-                                              ErrorCollector.log("🟢 بیدار شدم! فرمان شما: $txt")
+                                              ErrorCollector.log("🟢 بیدار شدم! فرمان: $txt")
                                               speak("جانم؟")
-                                              // اگر در همان جمله فرمان هم داده بود، پردازش کن
                                               val cmd = txt.substringAfter("دانا").trim()
-                                              if (cmd.isNotEmpty()) {
-                                                  handleCmd(cmd)
-                                              } else {
-                                                  listen(500L) // منتظر فرمان بعدی می‌ماند
-                                              }
+                                              if (cmd.isNotEmpty()) handleCmd(cmd) else listen(500L)
                                           } else {
-                                              listen(1000L) // کلمه دانا نبود، به خواب ادامه بده
+                                              listen(1000L)
                                           }
                                       } else {
-                                          // قبلا بیدار شده، الان این متن فرمان است
                                           ErrorCollector.log("✅ فرمان دریافتی: «$txt»")
-                                          isAwake = false // بعد از گرفتن فرمان دوباره به حالت انتظار می‌رود
+                                          isAwake = false
                                           handleCmd(txt)
                                       }
                                   } else {
                                       listen(1000L)
                                   }
                               }
-
                               override fun onPartialResults(b: Bundle?) {
                                   val p = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.replace("ي", "ی")?.replace("ك", "ک")?.trim() ?: ""
                                   if (!isAwake && p.contains("دانا")) {
                                       isAwake = true
-                                      ErrorCollector.log("🟢 بیدار شدم (تشخیص آنلاین): $p")
+                                      ErrorCollector.log("🟢 بیدار شدم: $p")
                                       speak("جانم؟")
                                   }
                               }
-
                               override fun onEvent(t: Int, b: Bundle?) {}
                           })
                           listen(1000L)
@@ -229,16 +214,30 @@ jobs:
                   }, delay)
               }
 
-              private fun handleCmd(t: String) {
+              private fun handleCmd(raw: String) {
+                  val t = raw.replace("ي", "ی").replace("ك", "ک").replace("دانا", "").trim()
+                  ErrorCollector.log("⚙️ اجرای دستور: «$t»")
+
                   when {
+                      // ۱. چراغ قوه
                       t.contains("چراغ قوه") || t.contains("فلش") -> {
-                          if (t.contains("خاموش")) { setFlashlight(false); speak("چراغ قوه خاموش شد") }
-                          else { setFlashlight(true); speak("چراغ قوه روشن شد") }
+                          if (t.contains("خاموش")) {
+                              setFlashlight(false)
+                              speak("چراغ قوه خاموش شد")
+                          } else {
+                              setFlashlight(true)
+                              speak("چراغ قوه روشن شد")
+                          }
                       }
+
+                      // ۲. زنگ ساعت و هشدار
                       t.contains("هشدار") || t.contains("زنگ ساعت") || t.contains("آلارم") -> {
-                          val nums = t.replace(Regex("[^0-9]"), " ").trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-                          val hour = if (nums.isNotEmpty()) nums[0].toIntOrNull() ?: 7 else 7
-                          val min = if (nums.size > 1) nums[1].toIntOrNull() ?: 0 else 0
+                          var hour = 7
+                          var min = 0
+                          val numbers = t.replace(Regex("[^0-9]"), " ").trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                          if (numbers.isNotEmpty()) hour = numbers[0].toIntOrNull() ?: 7
+                          if (numbers.size > 1) min = numbers[1].toIntOrNull() ?: 0
+
                           speak("هشدار برای ساعت $hour و $min تنظیم شد")
                           try {
                               startActivity(Intent(AlarmClock.ACTION_SET_ALARM).apply {
@@ -249,6 +248,33 @@ jobs:
                               })
                           } catch (e: Exception) {}
                       }
+
+                      // ۳. پیام‌رسان‌ها
+                      t.contains("پیام") || t.contains("بگو") -> {
+                          val pkg = when {
+                              t.contains("ایتا") -> "ir.eitaa.messenger"
+                              t.contains("تلگرام") -> "org.telegram.messenger"
+                              else -> "ir.eitaa.messenger"
+                          }
+                          speak("در حال باز کردن پیام‌رسان")
+                          try {
+                              val intent = Intent().apply {
+                                  action = Intent.ACTION_SEND
+                                  putExtra(Intent.EXTRA_TEXT, "سلام")
+                                  type = "text/plain"
+                                  setPackage(pkg)
+                                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                              }
+                              startActivity(intent)
+                          } catch (e: Exception) {
+                              packageManager.getLaunchIntentForPackage(pkg)?.let {
+                                  it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                  startActivity(it)
+                              }
+                          }
+                      }
+
+                      // ۴. بلوتوث و وای‌فای
                       t.contains("بلوتوث") -> {
                           speak("تنظیمات بلوتوث")
                           startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -257,12 +283,14 @@ jobs:
                           speak("تنظیمات وای‌فای")
                           startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                       }
+
+                      // ۵. باز کردن برنامه‌ها
                       t.contains("اجرا کن") || t.contains("فعال کن") || t.contains("باز کن") -> {
-                          val app = t.replace("دانا", "").replace("برنامه", "").replace("رو", "").replace("را", "").replace("اجرا کن", "").replace("فعال کن", "").replace("باز کن", "").trim()
+                          val app = t.replace("برنامه", "").replace("رو", "").replace("را", "").replace("اجرا کن", "").replace("فعال کن", "").replace("باز کن", "").trim()
                           if (openApp(app)) speak("چشم، باز شد") else speak("برنامه پیدا نشد")
                       }
                   }
-                  // بعد از اتمام دستور، دوباره به حالت انتظار (خواب) می‌رود
+
                   isAwake = false
                   listen(2000L)
               }
